@@ -1,0 +1,114 @@
+name: Build onclite kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: "Defconfig name (leave empty to auto-detect *onclite*)"
+        required: false
+        default: ""
+      clang_url:
+        description: "Clang tarball URL (AOSP prebuilt by default)"
+        required: false
+        default: "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902.tar.gz"
+
+env:
+  ARCH: arm64
+  SUBARCH: arm64
+  TZ: Asia/Dhaka
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev libncurses-dev cpio zip unzip \
+            curl git xz-utils python3 device-tree-compiler ccache \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Download clang
+        run: |
+          mkdir -p "$HOME/clang"
+          curl -L --retry 3 "${{ github.event.inputs.clang_url }}" | tar -xz -C "$HOME/clang"
+          "$HOME/clang/bin/clang" --version | head -n1
+
+      - name: Patch known build issues
+        run: |
+          # Polly flags are not supported by AOSP clang
+          sed -i -E 's/-mllvm -polly[^[:space:]]*//g' Makefile arch/arm64/Makefile || true
+          sed -i -E 's/ -polly[^[:space:]]*//g' Makefile arch/arm64/Makefile || true
+          # dtc yylloc multiple definition with newer host gcc
+          grep -rl '^YYLTYPE yylloc;' scripts/dtc 2>/dev/null | xargs -r sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/'
+
+      - name: Detect defconfig
+        id: cfg
+        run: |
+          DEF="${{ github.event.inputs.defconfig }}"
+          if [ -z "$DEF" ] || [ ! -f "arch/arm64/configs/$DEF" ]; then
+            FOUND=$(find arch/arm64/configs -type f -name '*onclite*' | sort | head -n1)
+            [ -z "$FOUND" ] && { echo "No onclite defconfig found:"; ls arch/arm64/configs | head -50; exit 1; }
+            DEF="${FOUND#arch/arm64/configs/}"
+          fi
+          echo "Using defconfig: $DEF"
+          echo "defconfig=$DEF" >> "$GITHUB_OUTPUT"
+
+      - name: Build kernel
+        shell: bash
+        run: |
+          export PATH="$HOME/clang/bin:$PATH"
+          export KBUILD_BUILD_USER="Aafiq"
+          export KBUILD_BUILD_HOST="HackX"
+          MK="make -j$(nproc --all) O=out ARCH=arm64 \
+            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip"
+          $MK "${{ steps.cfg.outputs.defconfig }}"
+          $MK 2>&1 | tee build.log
+
+      - name: Package with AnyKernel3
+        run: |
+          BOOT=out/arch/arm64/boot
+          if   [ -f $BOOT/Image.gz-dtb ]; then IMG=$BOOT/Image.gz-dtb
+          elif [ -f $BOOT/Image.gz ];     then IMG=$BOOT/Image.gz
+          elif [ -f $BOOT/Image ];        then IMG=$BOOT/Image
+          else echo "No kernel image produced"; exit 1; fi
+          echo "Image: $IMG"
+
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
+          cp "$IMG" AK3/
+          [ -f $BOOT/dtbo.img ] && cp $BOOT/dtbo.img AK3/ || true
+
+          sed -i 's/^kernel.string=.*/kernel.string=HackX Kernel for Redmi 7 (onclite)\/Y3 (onc)/' AK3/anykernel.sh
+          sed -i 's/^do.devicecheck=.*/do.devicecheck=1/' AK3/anykernel.sh
+          sed -i 's/^device.name1=.*/device.name1=onclite/' AK3/anykernel.sh
+          sed -i 's/^device.name2=.*/device.name2=onc/' AK3/anykernel.sh
+          sed -i 's/^device.name[3-5]=.*//' AK3/anykernel.sh
+          sed -i 's/^block=.*/block=auto;/' AK3/anykernel.sh
+          sed -i 's/^is_slot_device=.*/is_slot_device=auto;/' AK3/anykernel.sh
+
+          NAME="HackX-onclite-$(date +%Y%m%d-%H%M).zip"
+          (cd AK3 && zip -r9 "../$NAME" . -x '.git*' 'README.md' '*placeholder')
+          echo "ZIP_NAME=$NAME" >> "$GITHUB_ENV"
+
+      - name: Upload kernel zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
