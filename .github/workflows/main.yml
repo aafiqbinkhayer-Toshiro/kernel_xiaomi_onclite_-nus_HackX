@@ -44,8 +44,8 @@ jobs:
       - name: Patch known build issues
         run: |
           # Polly flags are not supported by AOSP clang
-          sed -i -E 's/-mllvm -polly[^[:space:]]*//g' Makefile arch/arm64/Makefile || true
-          sed -i -E 's/ -polly[^[:space:]]*//g' Makefile arch/arm64/Makefile || true
+          sed -i -E 's/-mllvm -polly[^[:space:]),]*//g' Makefile arch/arm64/Makefile || true
+          sed -i -E 's/ -polly[^[:space:]),]*//g' Makefile arch/arm64/Makefile || true
           # dtc yylloc multiple definition with newer host gcc
           grep -rl '^YYLTYPE yylloc;' scripts/dtc 2>/dev/null | xargs -r sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/'
 
@@ -112,3 +112,4 @@ jobs:
           name: build-log
           path: build.log
           if-no-files-found: ignore
+￼Enter
