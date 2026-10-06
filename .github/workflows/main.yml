@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       defconfig:
-        description: "Defconfig name (leave empty to auto-detect *onclite*)"
+        description: "Defconfig name"
         required: false
-        default: ""
+        default: "onc-perf_defconfig"
       clang_url:
         description: "Clang tarball URL (AOSP prebuilt by default)"
         required: false
@@ -54,8 +54,8 @@ jobs:
         run: |
           DEF="${{ github.event.inputs.defconfig }}"
           if [ -z "$DEF" ] || [ ! -f "arch/arm64/configs/$DEF" ]; then
-            FOUND=$(find arch/arm64/configs -type f -name '*onclite*' | sort | head -n1)
-            [ -z "$FOUND" ] && { echo "No onclite defconfig found:"; ls arch/arm64/configs | head -50; exit 1; }
+            FOUND=$(find arch/arm64/configs -type f -name 'onc*' | sort | head -n1)
+            [ -z "$FOUND" ] && { echo "No onc defconfig found:"; ls arch/arm64/configs | head -50; exit 1; }
             DEF="${FOUND#arch/arm64/configs/}"
           fi
           echo "Using defconfig: $DEF"
